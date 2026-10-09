@@ -1,0 +1,12 @@
+# The ISO is ~700 MB (over GitHub's 100 MB file limit) and belongs to No Starch Press.
+# Each machine rips it from the disc or downloads it with the scripts instead.
+iso/*.iso
+iso/*.part
+
+# Your personal work from inside the VM
+shared/*
+!shared/.gitkeep
+
+*.qcow2
+.DS_Store
+Thumbs.db
