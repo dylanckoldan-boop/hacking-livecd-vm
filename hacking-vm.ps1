@@ -69,40 +69,44 @@ function Invoke-Rip {
     $devicePath = "\\.\$Drive"
     Say "Reading disc in $Drive ..."
 
-    # GENERIC_READ, share read|write, OPEN_EXISTING
-    $handle = [RawDisk]::CreateFile($devicePath, 0x80000000, 3, [IntPtr]::Zero, 3, 0, [IntPtr]::Zero)
+    # GENERIC_READ (0x80000000), share read|write, OPEN_EXISTING.
+    # Written as a decimal [uint32] because PowerShell parses the hex literal as a negative Int32.
+    $GENERIC_READ = [uint32]2147483648
+    $handle = [RawDisk]::CreateFile($devicePath, $GENERIC_READ, [uint32]3, [IntPtr]::Zero, [uint32]3, [uint32]0, [IntPtr]::Zero)
     if ($handle.IsInvalid) { Die "Couldn't open $devicePath (error $([Runtime.InteropServices.Marshal]::GetLastWin32Error())). Try running the command prompt as Administrator." }
     $in = New-Object System.IO.FileStream($handle, [System.IO.FileAccess]::Read, 65536)
-    try {
-        # ISO9660 primary volume descriptor: sector 16, offset 80 = size in 2048-byte blocks.
-        $sector = New-Object byte[] 2048
-        $in.Position = 16 * 2048
-        [void]$in.Read($sector, 0, 2048)
-        $blocks = [BitConverter]::ToUInt32($sector, 80)
-        if ($blocks -le 0) { Die "This doesn't look like an ISO9660 disc." }
-        $total = [int64]$blocks * 2048
-        Say ("Disc filesystem is {0} MB; copying to {1} ..." -f [math]::Round($total / 1MB), $Iso)
-
-        $in.Position = 0
-        $part = "$Iso.part"
-        $out = [System.IO.File]::Create($part)
-        try {
-            $buf = New-Object byte[] (2048 * 512)   # 1 MB, a multiple of the sector size
-            $done = [int64]0
-            while ($done -lt $total) {
-                $want = [int][math]::Min($buf.Length, $total - $done)
-                $n = $in.Read($buf, 0, $want)
-                if ($n -le 0) { Die "Read error at byte $done - the disc may be scratched." }
-                $out.Write($buf, 0, $n)
-                $done += $n
-                Write-Progress -Activity "Copying LiveCD" -PercentComplete ([int](100 * $done / $total))
-            }
-        } finally { $out.Close() }
-    } finally { $in.Close() }
-    Write-Progress -Activity "Copying LiveCD" -Completed
+    try { Copy-IsoStream $in "$Iso.part" } finally { $in.Close() }
     Move-Item -Force "$Iso.part" $Iso
     Say "Saved $Iso"
     [void](Invoke-Verify)
+}
+
+# Copies exactly the ISO9660 filesystem from a readable, seekable stream (the disc) to $Dest.
+function Copy-IsoStream($in, [string]$Dest) {
+    # ISO9660 primary volume descriptor: sector 16, offset 80 = size in 2048-byte blocks.
+    $sector = New-Object byte[] 2048
+    $in.Position = 16 * 2048
+    [void]$in.Read($sector, 0, 2048)
+    $blocks = [BitConverter]::ToUInt32($sector, 80)
+    if ($blocks -le 0) { Die "This doesn't look like an ISO9660 disc." }
+    $total = [int64]$blocks * 2048
+    Say ("Disc filesystem is {0} MB; copying ..." -f [math]::Round($total / 1MB))
+
+    $in.Position = 0
+    $out = [System.IO.File]::Create($Dest)
+    try {
+        $buf = New-Object byte[] (2048 * 512)   # 1 MB, a multiple of the sector size
+        $done = [int64]0
+        while ($done -lt $total) {
+            $want = [int][math]::Min([int64]$buf.Length, $total - $done)
+            $n = $in.Read($buf, 0, $want)
+            if ($n -le 0) { Die "Read error at byte $done - the disc may be scratched or dirty." }
+            $out.Write($buf, 0, $n)
+            $done += $n
+            Write-Progress -Activity "Copying LiveCD" -PercentComplete ([int](100 * $done / $total))
+        }
+    } finally { $out.Close() }
+    Write-Progress -Activity "Copying LiveCD" -Completed
 }
 
 function Invoke-Download {
